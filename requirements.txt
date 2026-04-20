@@ -7,3 +7,4 @@ requests
 feedparser
 vaderSentiment
 streamlit-autorefresh
+openai>=1.0.0
