@@ -20,7 +20,7 @@ st.write("Last Updated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 # -----------------------------
 # OPENAI
 # -----------------------------
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+client = OpenAI(api_key=st.secrets["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"])
 
 # -----------------------------
 # LOAD DATA
