@@ -6,37 +6,21 @@ import requests
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime
+import time
+from openai import OpenAI
 
+# -----------------------------
+# CONFIG
+# -----------------------------
 st.set_page_config(layout="wide")
-
-# -----------------------------
-# AUTO REFRESH (60 sec)
-# -----------------------------
-
-# -----------------------------
-# DARK UI
-# -----------------------------
-st.markdown("""
-<style>
-.stApp {background-color: #0B0F14;}
-h1, h2, h3 {color: #00FFAA;}
-p, span {color: #E6EDF3;}
-
-div[data-testid="metric-container"] {
-    background-color: #11161D;
-    border: 1px solid #1F2A36;
-    padding: 15px;
-    border-radius: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("📊 GOLD TERMINAL")
+st.title("📊 GOLD TERMINAL (AI Powered)")
 
 st.write("Last Updated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-if st.button("🔄 Refresh Now"):
-    st.rerun()
+# -----------------------------
+# OPENAI
+# -----------------------------
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # -----------------------------
 # LOAD DATA
@@ -44,7 +28,6 @@ if st.button("🔄 Refresh Now"):
 @st.cache_data
 def load_data(ticker):
     df = yf.download(ticker, period="3mo", interval="1d", progress=False)
-
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -59,7 +42,7 @@ yields = load_data("^TNX")
 vix = load_data("^VIX")
 
 # -----------------------------
-# SIGNAL FUNCTION
+# SIGNALS
 # -----------------------------
 def get_signal(df):
     try:
@@ -86,7 +69,7 @@ yield_sig = -get_signal(yields)
 gold_sig = get_signal(gold)
 
 # -----------------------------
-# VIX RISK
+# VIX
 # -----------------------------
 try:
     vix_close = vix["Close"].dropna()
@@ -104,9 +87,7 @@ analyzer = SentimentIntensityAnalyzer()
 def get_news():
     try:
         feed = feedparser.parse("https://news.google.com/rss/search?q=gold+war+inflation+fed")
-
-        scores = []
-        headlines = []
+        scores, headlines = [], []
 
         for entry in feed.entries[:10]:
             text = entry.title.lower()
@@ -138,27 +119,6 @@ else:
     news_bias = 0
 
 # -----------------------------
-# EVENTS
-# -----------------------------
-def get_events():
-    try:
-        url = "https://api.tradingeconomics.com/calendar?c=guest:guest&f=json"
-        data = requests.get(url).json()
-
-        events = []
-        for e in data[:50]:
-            if "United States" in e.get("Country",""):
-                if any(x in e.get("Event","") for x in ["CPI","Fed","Interest"]):
-                    events.append(f"{e['Event']} - {e['Date']}")
-
-        return events[:5]
-
-    except:
-        return ["No event data"]
-
-events = get_events()
-
-# -----------------------------
 # REGIME
 # -----------------------------
 def get_regime(gold, vix):
@@ -169,14 +129,14 @@ def get_regime(gold, vix):
         vix_val = float(vix["Close"].iloc[-1])
 
         if vix_val > 22:
-            return "🔵 VOLATILE"
+            return "VOLATILE"
 
         deviation = abs(price - ma50) / ma50
 
         if deviation > 0.02:
-            return "🟢 TRENDING"
+            return "TRENDING"
         else:
-            return "🟡 RANGE"
+            return "RANGE"
 
     except:
         return "UNKNOWN"
@@ -184,7 +144,7 @@ def get_regime(gold, vix):
 regime = get_regime(gold, vix)
 
 # -----------------------------
-# FINAL SCORE
+# SCORE & BIAS
 # -----------------------------
 score = usd_sig + yield_sig + gold_sig + risk_sig + news_bias
 
@@ -200,69 +160,97 @@ else:
     bias = "NEUTRAL"
 
 # -----------------------------
+# STRATEGY
+# -----------------------------
+def get_strategy(regime):
+    if regime == "TRENDING":
+        return "Breakout / Trend Following"
+    elif regime == "RANGE":
+        return "Mean Reversion"
+    elif regime == "VOLATILE":
+        return "Reduce size / Stay out"
+    else:
+        return "No clear strategy"
+
+strategy = get_strategy(regime)
+
+# -----------------------------
+# DO NOT TRADE FILTER
+# -----------------------------
+def do_not_trade(score, regime, sentiment):
+    if -0.5 < score < 0.5:
+        return True, "Low conviction"
+    if regime == "VOLATILE":
+        return True, "High volatility"
+    if abs(sentiment) < 0.05:
+        return True, "No clear news direction"
+    return False, ""
+
+avoid, reason = do_not_trade(score, regime, sentiment)
+
+# -----------------------------
+# AI REPORT
+# -----------------------------
+def generate_ai():
+    prompt = f"""
+Gold Market Analysis:
+
+Bias: {bias}
+Score: {score}
+Regime: {regime}
+Sentiment: {sentiment}
+
+Explain:
+1. Market condition
+2. Best strategy
+3. Should trade or avoid
+"""
+
+    try:
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.3
+        )
+        return res.choices[0].message.content
+    except Exception as e:
+        return f"AI Error: {e}"
+
+# -----------------------------
 # CHART
 # -----------------------------
 def plot_chart(df):
     fig = go.Figure()
     if not df.empty:
         fig.add_trace(go.Scatter(x=df.index, y=df["Close"]))
-    fig.update_layout(height=300)
     return fig
 
 # -----------------------------
 # UI
 # -----------------------------
-col1, col2 = st.columns([2,1])
+st.subheader("📈 Gold Chart")
+st.plotly_chart(plot_chart(gold), use_container_width=True)
 
-with col1:
-    st.subheader("📈 Gold Price")
-    st.plotly_chart(plot_chart(gold), use_container_width=True, key="gold1")
+st.subheader("📊 Summary")
+st.write("Bias:", bias)
+st.write("Score:", round(score,2))
+st.write("Regime:", regime)
+st.write("Strategy:", strategy)
 
-with col2:
-    st.subheader("📌 Market Summary")
+if avoid:
+    st.error(f"🚫 DO NOT TRADE: {reason}")
+else:
+    st.success("✅ Trading allowed")
 
-    if "BUY" in bias:
-        st.success(bias)
-    elif "SELL" in bias:
-        st.error(bias)
-    else:
-        st.warning(bias)
+st.subheader("📰 News")
+for h in headlines:
+    st.write("-", h)
 
-    st.write(f"Score: {round(score,2)}")
-    st.write(f"Regime: {regime}")
+st.subheader("🤖 AI Analysis")
+st.write(generate_ai())
 
-# Signals
-st.subheader("⚡ Signals")
-c1,c2,c3,c4 = st.columns(4)
-c1.metric("USD", round(usd_sig,2))
-c2.metric("Yields", round(yield_sig,2))
-c3.metric("Gold", round(gold_sig,2))
-c4.metric("Risk", risk_sig)
-
-# News & Events
-colA,colB = st.columns(2)
-
-with colA:
-    st.subheader("🗓️ Events")
-    for e in events:
-        st.write(e)
-
-with colB:
-    st.subheader("📰 News")
-    st.write(f"Sentiment: {round(sentiment,2)}")
-    for h in headlines:
-        st.write("• " + h)
-
-# Extra charts
-st.subheader("📊 Market Overview")
-c1,c2 = st.columns(2)
-c3,c4 = st.columns(2)
-
-c1.plotly_chart(plot_chart(usd), use_container_width=True, key="usd")
-c2.plotly_chart(plot_chart(yields), use_container_width=True, key="yields")
-c3.plotly_chart(plot_chart(vix), use_container_width=True, key="vix")
-c4.plotly_chart(plot_chart(gold), use_container_width=True, key="gold2")
-import time
-
+# -----------------------------
+# AUTO REFRESH
+# -----------------------------
 time.sleep(60)
 st.rerun()
