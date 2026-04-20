@@ -2,39 +2,30 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime
 import time
-from openai import OpenAI
 
-# -----------------------------
-# CONFIG
-# -----------------------------
 st.set_page_config(layout="wide")
-st.title("📊 GOLD TERMINAL (AI Powered)")
+st.title("📊 GOLD TERMINAL")
 
 st.write("Last Updated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-# -----------------------------
-# OPENAI
-# -----------------------------
-client = OpenAI(api_key=st.secrets["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"])
 
 # -----------------------------
 # LOAD DATA
 # -----------------------------
 @st.cache_data
 def load_data(ticker):
-    df = yf.download(ticker, period="3mo", interval="1d", progress=False)
-    if df is None or df.empty:
+    try:
+        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df.dropna()
+    except:
         return pd.DataFrame()
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    return df.dropna()
 
 gold = load_data("GC=F")
 usd = load_data("DX-Y.NYB")
@@ -54,11 +45,9 @@ def get_signal(df):
         prev = float(close.iloc[-5])
 
         trend = 1 if last > prev else -1
+        ma = close.rolling(20).mean().iloc[-1]
 
-        ma = close.rolling(20).mean()
-        ma_last = float(ma.iloc[-1])
-
-        ma_sig = 1 if last > ma_last else -1
+        ma_sig = 1 if last > ma else -1
 
         return (trend + ma_sig) / 2
     except:
@@ -164,13 +153,13 @@ else:
 # -----------------------------
 def get_strategy(regime):
     if regime == "TRENDING":
-        return "Breakout / Trend Following"
+        return "➡️ Breakout / Trend Following"
     elif regime == "RANGE":
-        return "Mean Reversion"
+        return "➡️ Mean Reversion"
     elif regime == "VOLATILE":
-        return "Reduce size / Stay out"
+        return "➡️ Avoid or Reduce Position Size"
     else:
-        return "No clear strategy"
+        return "➡️ No clear strategy"
 
 strategy = get_strategy(regime)
 
@@ -183,38 +172,35 @@ def do_not_trade(score, regime, sentiment):
     if regime == "VOLATILE":
         return True, "High volatility"
     if abs(sentiment) < 0.05:
-        return True, "No clear news direction"
+        return True, "No strong news direction"
     return False, ""
 
 avoid, reason = do_not_trade(score, regime, sentiment)
 
 # -----------------------------
-# AI REPORT
+# AI-LIKE REPORT (NO API)
 # -----------------------------
-def generate_ai():
-    prompt = f"""
-Gold Market Analysis:
+def generate_report():
+    text = f"Bias: {bias}, Regime: {regime}. "
 
-Bias: {bias}
-Score: {score}
-Regime: {regime}
-Sentiment: {sentiment}
+    if "BUY" in bias:
+        text += "Gold has bullish support. "
+    elif "SELL" in bias:
+        text += "Gold faces bearish pressure. "
+    else:
+        text += "Market is neutral. "
 
-Explain:
-1. Market condition
-2. Best strategy
-3. Should trade or avoid
-"""
+    if regime == "TRENDING":
+        text += "Trend-following strategies are preferred. "
+    elif regime == "RANGE":
+        text += "Mean reversion strategies work better. "
+    else:
+        text += "Volatility is high, avoid aggressive trading. "
 
-    try:
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"user","content":prompt}],
-            temperature=0.3
-        )
-        return res.choices[0].message.content
-    except Exception as e:
-        return f"AI Error: {e}"
+    if avoid:
+        text += f"⚠️ Avoid trading: {reason}."
+
+    return text
 
 # -----------------------------
 # CHART
@@ -231,7 +217,7 @@ def plot_chart(df):
 st.subheader("📈 Gold Chart")
 st.plotly_chart(plot_chart(gold), use_container_width=True)
 
-st.subheader("📊 Summary")
+st.subheader("📊 Market Summary")
 st.write("Bias:", bias)
 st.write("Score:", round(score,2))
 st.write("Regime:", regime)
@@ -240,14 +226,14 @@ st.write("Strategy:", strategy)
 if avoid:
     st.error(f"🚫 DO NOT TRADE: {reason}")
 else:
-    st.success("✅ Trading allowed")
+    st.success("✅ Trading conditions acceptable")
 
 st.subheader("📰 News")
 for h in headlines:
     st.write("-", h)
 
-st.subheader("🤖 AI Analysis")
-st.write(generate_ai())
+st.subheader("🧠 Market Report")
+st.write(generate_report())
 
 # -----------------------------
 # AUTO REFRESH
