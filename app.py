@@ -7,7 +7,7 @@ import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime
 import time
-
+from openai import OpenAI
 
 # -----------------------------
 # CONFIG
