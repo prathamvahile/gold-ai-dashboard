@@ -1,33 +1,36 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 import time
 
 st.set_page_config(layout="wide")
 
-SYMBOL = "EURUSD=X"
-
-st.title("📊 Live Quant Dashboard (Cloud Version)")
+st.title("📊 Live Quant Dashboard (Stable Cloud Version)")
 
 # -------------------------
-# AUTO REFRESH CONTROL
+# SETTINGS
 # -------------------------
-refresh_rate = st.sidebar.slider("Refresh (seconds)", 10, 120, 60)
+SYMBOL = "EURUSD"
+REFRESH = st.sidebar.slider("Refresh (sec)", 10, 120, 30)
 
 # -------------------------
-# DATA LOADING (SAFE)
+# DATA (ROBUST - NO YFINANCE)
 # -------------------------
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def get_data():
     try:
-        df = yf.download(SYMBOL, interval="5m", period="5d")
+        # Free FX API (no install issues)
+        url = f"https://api.exchangerate.host/timeseries?start_date=2024-01-01&end_date=2024-01-10&base=EUR&symbols=USD"
+        res = requests.get(url).json()
 
-        if df is None or df.empty:
+        rates = res.get("rates", {})
+        if not rates:
             return None
 
-        if 'Close' not in df.columns:
-            return None
+        df = pd.DataFrame(rates).T
+        df.columns = ["Close"]
+        df.index = pd.to_datetime(df.index)
 
         return df
 
@@ -35,62 +38,58 @@ def get_data():
         return None
 
 # -------------------------
-# FEATURE ENGINEERING
+# FEATURES
 # -------------------------
 def prepare(df):
-    df['ret'] = df['Close'].pct_change()
-    df['vol'] = df['ret'].rolling(20).std()
-    df['vol_mean'] = df['vol'].rolling(50).mean()
+    df["ret"] = df["Close"].pct_change()
+    df["vol"] = df["ret"].rolling(10).std()
+    df["vol_mean"] = df["vol"].rolling(20).mean()
 
-    df['mean'] = df['Close'].rolling(30).mean()
-    df['std'] = df['Close'].rolling(30).std()
-    df['z'] = (df['Close'] - df['mean']) / df['std']
+    df["mean"] = df["Close"].rolling(15).mean()
+    df["std"] = df["Close"].rolling(15).std()
+    df["z"] = (df["Close"] - df["mean"]) / df["std"]
 
-    df['ema_fast'] = df['Close'].ewm(span=10).mean()
-    df['ema_slow'] = df['Close'].ewm(span=30).mean()
+    df["ema_fast"] = df["Close"].ewm(span=5).mean()
+    df["ema_slow"] = df["Close"].ewm(span=15).mean()
 
     df.dropna(inplace=True)
     return df
 
 # -------------------------
-# REGIME DETECTION (NO HMM)
+# REGIME (STABLE)
 # -------------------------
 def get_regime(df):
     latest = df.iloc[-1]
 
-    vol = latest['vol']
-    vol_mean = latest['vol_mean']
-
-    if vol < vol_mean:
+    if latest["vol"] < latest["vol_mean"]:
         regime = "MR"
     else:
         regime = "TREND"
 
-    confidence = abs(vol - vol_mean) / (vol_mean + 1e-9)
+    confidence = abs(latest["vol"] - latest["vol_mean"]) / (latest["vol_mean"] + 1e-9)
 
     return regime, confidence
 
 # -------------------------
-# SIGNAL LOGIC
+# SIGNAL
 # -------------------------
-def get_signal(df, regime, confidence):
+def get_signal(df, regime):
     latest = df.iloc[-1]
 
-    z = latest['z']
-    ema_fast = latest['ema_fast']
-    ema_slow = latest['ema_slow']
+    z = latest["z"]
+    fast = latest["ema_fast"]
+    slow = latest["ema_slow"]
 
     signal = "WAIT"
 
-    # Strong filtering
     if regime == "MR":
-        if z < -1.8:
+        if z < -1.5:
             signal = "BUY"
-        elif z > 1.8:
+        elif z > 1.5:
             signal = "SELL"
 
-    elif regime == "TREND":
-        if ema_fast > ema_slow:
+    else:
+        if fast > slow:
             signal = "BUY"
         else:
             signal = "SELL"
@@ -98,45 +97,45 @@ def get_signal(df, regime, confidence):
     return signal, z
 
 # -------------------------
-# MAIN RUN
+# MAIN
 # -------------------------
 df = get_data()
 
 if df is None:
-    st.error("❌ Data not loading. Try again.")
+    st.error("❌ Data not loading (API issue)")
     st.stop()
 
 df = prepare(df)
 
+if df.empty:
+    st.warning("Not enough data yet")
+    st.stop()
+
 regime, confidence = get_regime(df)
-signal, z = get_signal(df, regime, confidence)
+signal, z = get_signal(df, regime)
 
 # -------------------------
 # UI
 # -------------------------
-col1, col2, col3, col4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 
-col1.metric("Signal", signal)
-col2.metric("Regime", regime)
-col3.metric("Confidence", round(confidence, 2))
-col4.metric("Z-score", round(z, 2))
+c1.metric("Signal", signal)
+c2.metric("Regime", regime)
+c3.metric("Confidence", round(confidence, 2))
+c4.metric("Z-score", round(z, 2))
 
-st.line_chart(df['Close'])
+st.line_chart(df["Close"])
 
-# -------------------------
 # ALERT
-# -------------------------
-if signal in ["BUY", "SELL"] and confidence > 0.5:
-    st.warning("🚨 STRONG SIGNAL!")
+if signal in ["BUY", "SELL"] and confidence > 0.4:
+    st.warning("🚨 STRONG SIGNAL")
 
-# -------------------------
-# DEBUG (optional)
-# -------------------------
-with st.expander("Debug Data"):
+# DEBUG
+with st.expander("Debug"):
     st.write(df.tail())
 
 # -------------------------
-# AUTO REFRESH
+# REFRESH
 # -------------------------
-time.sleep(refresh_rate)
+time.sleep(REFRESH)
 st.rerun()
