@@ -42,22 +42,12 @@ def prepare(df):
 # -------------------------
 # HMM (cached)
 # -------------------------
-@st.cache_resource(ttl=300)
-def train_hmm(df):
-    X = df[['ret', 'vol']].values
+df['vol'] = df['Close'].pct_change().rolling(20).std()
 
-    model = GaussianHMM(n_components=2, n_iter=100)
-    model.fit(X)
-
-    states = model.predict(X)
-
-    vols = []
-    for i in range(2):
-        vols.append(np.std(X[states == i][:, 0]))
-
-    mr_state = np.argmin(vols)
-
-    return model, mr_state
+if df['vol'].iloc[-1] < df['vol'].mean():
+    regime = "MR"
+else:
+    regime = "TREND"
 
 # -------------------------
 # SIGNAL
