@@ -2,32 +2,45 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from hmmlearn.hmm import GaussianHMM
 import time
 
 st.set_page_config(layout="wide")
 
 SYMBOL = "EURUSD=X"
 
-# -------------------------
-# AUTO REFRESH
-# -------------------------
-st.title("📊 Live Quant Dashboard")
+st.title("📊 Live Quant Dashboard (Cloud Version)")
 
+# -------------------------
+# AUTO REFRESH CONTROL
+# -------------------------
 refresh_rate = st.sidebar.slider("Refresh (seconds)", 10, 120, 60)
-st.sidebar.write("Auto-refreshing...")
 
 # -------------------------
-# DATA
+# DATA LOADING (SAFE)
 # -------------------------
 @st.cache_data(ttl=60)
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="2d")
-    return df
+    try:
+        df = yf.download(SYMBOL, interval="5m", period="5d")
 
+        if df is None or df.empty:
+            return None
+
+        if 'Close' not in df.columns:
+            return None
+
+        return df
+
+    except:
+        return None
+
+# -------------------------
+# FEATURE ENGINEERING
+# -------------------------
 def prepare(df):
     df['ret'] = df['Close'].pct_change()
-    df['vol'] = df['ret'].rolling(10).std()
+    df['vol'] = df['ret'].rolling(20).std()
+    df['vol_mean'] = df['vol'].rolling(50).mean()
 
     df['mean'] = df['Close'].rolling(30).mean()
     df['std'] = df['Close'].rolling(30).std()
@@ -39,36 +52,29 @@ def prepare(df):
     df.dropna(inplace=True)
     return df
 
-# Regime detection (no hmmlearn)
-df['ret'] = df['Close'].pct_change()
-df['vol'] = df['ret'].rolling(20).std()
-df['vol_mean'] = df['vol'].rolling(50).mean()
-
-# Regime logic
-if df['vol'].iloc[-1] < df['vol_mean'].iloc[-1]:
-    regime = "MR"
-else:
-    regime = "TREND"
-
-confidence = abs(df['vol'].iloc[-1] - df['vol_mean'].iloc[-1]) / df['vol_mean'].iloc[-1]
-
 # -------------------------
-# SIGNAL
+# REGIME DETECTION (NO HMM)
 # -------------------------
-def get_signal(df, model, mr_state):
+def get_regime(df):
     latest = df.iloc[-1]
 
-    X = df[['ret', 'vol']].values
-    probs = model.predict_proba(X)
+    vol = latest['vol']
+    vol_mean = latest['vol_mean']
 
-    prob_mr = probs[-1][mr_state]
-
-    if prob_mr > 0.65:
+    if vol < vol_mean:
         regime = "MR"
-    elif prob_mr < 0.35:
-        regime = "TREND"
     else:
-        regime = "NEUTRAL"
+        regime = "TREND"
+
+    confidence = abs(vol - vol_mean) / (vol_mean + 1e-9)
+
+    return regime, confidence
+
+# -------------------------
+# SIGNAL LOGIC
+# -------------------------
+def get_signal(df, regime, confidence):
+    latest = df.iloc[-1]
 
     z = latest['z']
     ema_fast = latest['ema_fast']
@@ -76,6 +82,7 @@ def get_signal(df, model, mr_state):
 
     signal = "WAIT"
 
+    # Strong filtering
     if regime == "MR":
         if z < -1.8:
             signal = "BUY"
@@ -88,16 +95,21 @@ def get_signal(df, model, mr_state):
         else:
             signal = "SELL"
 
-    return signal, regime, prob_mr, z
+    return signal, z
 
 # -------------------------
-# RUN
+# MAIN RUN
 # -------------------------
 df = get_data()
+
+if df is None:
+    st.error("❌ Data not loading. Try again.")
+    st.stop()
+
 df = prepare(df)
 
-model, mr_state = train_hmm(df)
-signal, regime, prob, z = get_signal(df, model, mr_state)
+regime, confidence = get_regime(df)
+signal, z = get_signal(df, regime, confidence)
 
 # -------------------------
 # UI
@@ -106,17 +118,25 @@ col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Signal", signal)
 col2.metric("Regime", regime)
-col3.metric("Confidence", round(prob, 2))
+col3.metric("Confidence", round(confidence, 2))
 col4.metric("Z-score", round(z, 2))
 
 st.line_chart(df['Close'])
 
+# -------------------------
 # ALERT
-if signal in ["BUY", "SELL"] and prob > 0.7:
+# -------------------------
+if signal in ["BUY", "SELL"] and confidence > 0.5:
     st.warning("🚨 STRONG SIGNAL!")
 
 # -------------------------
-# AUTO REFRESH LOGIC
+# DEBUG (optional)
+# -------------------------
+with st.expander("Debug Data"):
+    st.write(df.tail())
+
+# -------------------------
+# AUTO REFRESH
 # -------------------------
 time.sleep(refresh_rate)
 st.rerun()
