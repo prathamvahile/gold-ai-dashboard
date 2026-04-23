@@ -11,9 +11,10 @@ openai>=1.0.0
 numpy
 pandas
 yfinance
-streamlit
-numpy
-pandas
+numpy==1.23.5
+scipy==1.10.1
+scikit-learn==1.2.2
+hmmlearn==0.2.8
 yfinance
 streamlit
-plotly
+
