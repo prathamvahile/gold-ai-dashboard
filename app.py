@@ -39,15 +39,18 @@ def prepare(df):
     df.dropna(inplace=True)
     return df
 
-# -------------------------
-# HMM (cached)
-# -------------------------
-df['vol'] = df['Close'].pct_change().rolling(20).std()
+# Regime detection (no hmmlearn)
+df['ret'] = df['Close'].pct_change()
+df['vol'] = df['ret'].rolling(20).std()
+df['vol_mean'] = df['vol'].rolling(50).mean()
 
-if df['vol'].iloc[-1] < df['vol'].mean():
+# Regime logic
+if df['vol'].iloc[-1] < df['vol_mean'].iloc[-1]:
     regime = "MR"
 else:
     regime = "TREND"
+
+confidence = abs(df['vol'].iloc[-1] - df['vol_mean'].iloc[-1]) / df['vol_mean'].iloc[-1]
 
 # -------------------------
 # SIGNAL
