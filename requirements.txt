@@ -17,4 +17,7 @@ scikit-learn==1.2.2
 hmmlearn==0.2.8
 yfinance
 streamlit
-
+streamlit
+yfinance
+pandas
+numpy
