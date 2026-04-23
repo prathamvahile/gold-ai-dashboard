@@ -11,25 +11,24 @@ REFRESH = st.sidebar.slider("Refresh (sec)", 10, 120, 30)
 ASSET = st.sidebar.selectbox("Select Asset", ["GOLD", "EURUSD"])
 
 # -------------------------
-# DATA (STABLE SOURCE)
+# DATA (STABLE FOR BOTH)
 # -------------------------
 @st.cache_data(ttl=60)
 def get_data(asset):
     try:
         if asset == "EURUSD":
             url = "https://api.exchangerate.host/timeseries?start_date=2023-01-01&end_date=2024-01-01&base=EUR&symbols=USD"
-            res = requests.get(url).json()
-            rates = res["rates"]
-            df = pd.DataFrame(rates).T
-            df.columns = ["Close"]
+        else:
+            url = "https://api.exchangerate.host/timeseries?start_date=2023-01-01&end_date=2024-01-01&base=XAU&symbols=USD"
 
-        else:  # GOLD proxy
-            url = "https://api.metals.live/v1/spot/gold"
-            res = requests.get(url).json()
-            df = pd.DataFrame(res, columns=["timestamp", "Close"])
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-            df.set_index("timestamp", inplace=True)
+        res = requests.get(url, timeout=10).json()
+        rates = res.get("rates", {})
 
+        if not rates:
+            return None
+
+        df = pd.DataFrame(rates).T
+        df.columns = ["Close"]
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
 
@@ -69,11 +68,10 @@ def get_regime(df):
         regime = "TREND"
 
     confidence = abs(latest["vol"] - latest["vol_mean"]) / (latest["vol_mean"] + 1e-9)
-
     return regime, confidence
 
 # -------------------------
-# IMPROVED SIGNAL
+# SIGNAL (IMPROVED)
 # -------------------------
 def get_signal(df, regime):
     latest = df.iloc[-1]
@@ -90,7 +88,6 @@ def get_signal(df, regime):
             signal = "BUY"
         elif z > 2:
             signal = "SELL"
-
     else:
         if ret > 0.002 and fast > slow:
             signal = "BUY"
@@ -109,6 +106,7 @@ def backtest(df):
 
     trades = []
     signals = []
+    equity = []
 
     for i in range(50, len(df)):
         sub = df.iloc[:i]
@@ -117,7 +115,6 @@ def backtest(df):
         signal, _ = get_signal(sub, regime)
 
         price = df["Close"].iloc[i]
-
         signals.append(signal)
 
         if position == 0:
@@ -142,7 +139,9 @@ def backtest(df):
                 trades.append(pnl)
                 position = 0
 
-    return capital, trades, signals
+        equity.append(capital)
+
+    return capital, trades, signals, equity
 
 # -------------------------
 # MAIN
@@ -162,7 +161,7 @@ if df.empty:
 regime, confidence = get_regime(df)
 signal, z = get_signal(df, regime)
 
-capital, trades, signals = backtest(df)
+capital, trades, signals, equity = backtest(df)
 
 # -------------------------
 # METRICS
@@ -192,12 +191,16 @@ p1.metric("Final Capital", round(capital, 2))
 p2.metric("Trades", len(trades))
 p3.metric("Win Rate %", round(win_rate, 2))
 
-# Signal History
-st.subheader("📈 Signal History")
+# Equity curve
+st.subheader("📈 Equity Curve")
+st.line_chart(pd.Series(equity))
+
+# Signal history
+st.subheader("📡 Recent Signals")
 st.write(signals[-20:])
 
 # Trades
-st.subheader("📉 Trades")
+st.subheader("📉 Recent Trades")
 st.write(trades[-20:])
 
 # Alert
