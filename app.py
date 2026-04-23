@@ -8,7 +8,7 @@ st.set_page_config(layout="wide")
 st.title("⚡ Live Signals (Gold + EURUSD)")
 
 # 🔑 Your API Key (already added)
-API_KEY = "SWNU96LQWGRNJWGI"
+API_KEY = "QLUPEQV4GYWP7US9"
 
 ASSET = st.sidebar.selectbox("Asset", ["EURUSD", "GOLD"])
 REFRESH = st.sidebar.slider("Refresh (sec)", 30, 120, 60)
