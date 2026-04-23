@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import time
+from datetime import datetime
 
 st.set_page_config(layout="wide")
 st.title("📊 Quant Dashboard (Gold + EURUSD)")
@@ -11,30 +12,31 @@ REFRESH = st.sidebar.slider("Refresh (sec)", 10, 120, 30)
 ASSET = st.sidebar.selectbox("Select Asset", ["GOLD", "EURUSD"])
 
 # -------------------------
-# DATA (STABLE FOR BOTH)
+# DATA (ROBUST YAHOO CSV)
 # -------------------------
 @st.cache_data(ttl=60)
 def get_data(asset):
     try:
-        if asset == "EURUSD":
-            url = "https://api.exchangerate.host/timeseries?start_date=2023-01-01&end_date=2024-01-01&base=EUR&symbols=USD"
+        end = int(datetime.now().timestamp())
+        start = end - 60 * 60 * 24 * 365  # 1 year
+
+        if asset == "GOLD":
+            symbol = "GC=F"  # Gold Futures
         else:
-            url = "https://api.exchangerate.host/timeseries?start_date=2023-01-01&end_date=2024-01-01&base=XAU&symbols=USD"
+            symbol = "EURUSD=X"
 
-        res = requests.get(url, timeout=10).json()
-        rates = res.get("rates", {})
+        url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={start}&period2={end}&interval=1d&events=history"
 
-        if not rates:
-            return None
+        df = pd.read_csv(url)
 
-        df = pd.DataFrame(rates).T
-        df.columns = ["Close"]
-        df.index = pd.to_datetime(df.index)
-        df.sort_index(inplace=True)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.set_index("Date", inplace=True)
+
+        df = df[["Close"]].dropna()
 
         return df
 
-    except:
+    except Exception as e:
         return None
 
 # -------------------------
@@ -71,7 +73,7 @@ def get_regime(df):
     return regime, confidence
 
 # -------------------------
-# SIGNAL (IMPROVED)
+# SIGNAL
 # -------------------------
 def get_signal(df, regime):
     latest = df.iloc[-1]
@@ -97,7 +99,7 @@ def get_signal(df, regime):
     return signal, z
 
 # -------------------------
-# BACKTEST + TRACKING
+# BACKTEST
 # -------------------------
 def backtest(df):
     capital = 10000
@@ -105,7 +107,6 @@ def backtest(df):
     entry_price = 0
 
     trades = []
-    signals = []
     equity = []
 
     for i in range(50, len(df)):
@@ -115,7 +116,6 @@ def backtest(df):
         signal, _ = get_signal(sub, regime)
 
         price = df["Close"].iloc[i]
-        signals.append(signal)
 
         if position == 0:
             if signal == "BUY":
@@ -141,27 +141,23 @@ def backtest(df):
 
         equity.append(capital)
 
-    return capital, trades, signals, equity
+    return capital, trades, equity
 
 # -------------------------
 # MAIN
 # -------------------------
 df = get_data(ASSET)
 
-if df is None:
-    st.error("❌ Data failed")
+if df is None or df.empty:
+    st.error("❌ Data failed (Yahoo blocked or network issue)")
     st.stop()
 
 df = prepare(df)
 
-if df.empty:
-    st.warning("Not enough data")
-    st.stop()
-
 regime, confidence = get_regime(df)
 signal, z = get_signal(df, regime)
 
-capital, trades, signals, equity = backtest(df)
+capital, trades, equity = backtest(df)
 
 # -------------------------
 # METRICS
@@ -183,30 +179,12 @@ c4.metric("Z-score", round(z, 2))
 
 st.line_chart(df["Close"])
 
-# Performance
 st.subheader("📊 Performance")
 
 p1, p2, p3 = st.columns(3)
-p1.metric("Final Capital", round(capital, 2))
+p1.metric("Capital", round(capital, 2))
 p2.metric("Trades", len(trades))
 p3.metric("Win Rate %", round(win_rate, 2))
 
-# Equity curve
 st.subheader("📈 Equity Curve")
 st.line_chart(pd.Series(equity))
-
-# Signal history
-st.subheader("📡 Recent Signals")
-st.write(signals[-20:])
-
-# Trades
-st.subheader("📉 Recent Trades")
-st.write(trades[-20:])
-
-# Alert
-if signal in ["BUY", "SELL"] and confidence > 0.5:
-    st.warning("🚨 STRONG SIGNAL")
-
-# Refresh
-time.sleep(REFRESH)
-st.rerun()
