@@ -1,65 +1,209 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 import time
 
 st.set_page_config(layout="wide")
+st.title("📊 Quant Dashboard (Gold + EURUSD)")
 
-st.title("📊 Quant Dashboard (Guaranteed Working)")
+REFRESH = st.sidebar.slider("Refresh (sec)", 10, 120, 30)
+ASSET = st.sidebar.selectbox("Select Asset", ["GOLD", "EURUSD"])
 
 # -------------------------
-# DUMMY DATA (NO API FAILURES)
+# DATA (STABLE SOURCE)
 # -------------------------
-@st.cache_data(ttl=10)
-def get_data():
-    np.random.seed(42)
-    price = np.cumsum(np.random.randn(200)) + 100
-    df = pd.DataFrame({"Close": price})
-    return df
+@st.cache_data(ttl=60)
+def get_data(asset):
+    try:
+        if asset == "EURUSD":
+            url = "https://api.exchangerate.host/timeseries?start_date=2023-01-01&end_date=2024-01-01&base=EUR&symbols=USD"
+            res = requests.get(url).json()
+            rates = res["rates"]
+            df = pd.DataFrame(rates).T
+            df.columns = ["Close"]
 
-df = get_data()
+        else:  # GOLD proxy
+            url = "https://api.metals.live/v1/spot/gold"
+            res = requests.get(url).json()
+            df = pd.DataFrame(res, columns=["timestamp", "Close"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+            df.set_index("timestamp", inplace=True)
+
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+
+        return df
+
+    except:
+        return None
 
 # -------------------------
 # FEATURES
 # -------------------------
-df["ret"] = df["Close"].pct_change()
-df["vol"] = df["ret"].rolling(10).std()
-df["mean"] = df["Close"].rolling(20).mean()
-df["std"] = df["Close"].rolling(20).std()
-df["z"] = (df["Close"] - df["mean"]) / df["std"]
+def prepare(df):
+    df["ret"] = df["Close"].pct_change()
 
-df.dropna(inplace=True)
+    df["vol"] = df["ret"].rolling(10).std()
+    df["vol_mean"] = df["vol"].rolling(30).mean()
+
+    df["mean"] = df["Close"].rolling(20).mean()
+    df["std"] = df["Close"].rolling(20).std()
+    df["z"] = (df["Close"] - df["mean"]) / df["std"]
+
+    df["ema_fast"] = df["Close"].ewm(span=5).mean()
+    df["ema_slow"] = df["Close"].ewm(span=15).mean()
+
+    df.dropna(inplace=True)
+    return df
 
 # -------------------------
 # REGIME
 # -------------------------
-latest = df.iloc[-1]
+def get_regime(df):
+    latest = df.iloc[-1]
 
-regime = "MR" if latest["vol"] < df["vol"].mean() else "TREND"
+    if latest["vol"] < latest["vol_mean"]:
+        regime = "MR"
+    else:
+        regime = "TREND"
+
+    confidence = abs(latest["vol"] - latest["vol_mean"]) / (latest["vol_mean"] + 1e-9)
+
+    return regime, confidence
 
 # -------------------------
-# SIGNAL
+# IMPROVED SIGNAL
 # -------------------------
-signal = "WAIT"
+def get_signal(df, regime):
+    latest = df.iloc[-1]
 
-if regime == "MR":
-    if latest["z"] < -1:
-        signal = "BUY"
-    elif latest["z"] > 1:
-        signal = "SELL"
-else:
-    signal = "BUY" if latest["ret"] > 0 else "SELL"
+    z = latest["z"]
+    fast = latest["ema_fast"]
+    slow = latest["ema_slow"]
+    ret = latest["ret"]
+
+    signal = "WAIT"
+
+    if regime == "MR":
+        if z < -2:
+            signal = "BUY"
+        elif z > 2:
+            signal = "SELL"
+
+    else:
+        if ret > 0.002 and fast > slow:
+            signal = "BUY"
+        elif ret < -0.002 and fast < slow:
+            signal = "SELL"
+
+    return signal, z
+
+# -------------------------
+# BACKTEST + TRACKING
+# -------------------------
+def backtest(df):
+    capital = 10000
+    position = 0
+    entry_price = 0
+
+    trades = []
+    signals = []
+
+    for i in range(50, len(df)):
+        sub = df.iloc[:i]
+
+        regime, _ = get_regime(sub)
+        signal, _ = get_signal(sub, regime)
+
+        price = df["Close"].iloc[i]
+
+        signals.append(signal)
+
+        if position == 0:
+            if signal == "BUY":
+                position = 1
+                entry_price = price
+            elif signal == "SELL":
+                position = -1
+                entry_price = price
+
+        elif position == 1:
+            pnl = price - entry_price
+            if pnl > 2 or pnl < -2:
+                capital += pnl
+                trades.append(pnl)
+                position = 0
+
+        elif position == -1:
+            pnl = entry_price - price
+            if pnl > 2 or pnl < -2:
+                capital += pnl
+                trades.append(pnl)
+                position = 0
+
+    return capital, trades, signals
+
+# -------------------------
+# MAIN
+# -------------------------
+df = get_data(ASSET)
+
+if df is None:
+    st.error("❌ Data failed")
+    st.stop()
+
+df = prepare(df)
+
+if df.empty:
+    st.warning("Not enough data")
+    st.stop()
+
+regime, confidence = get_regime(df)
+signal, z = get_signal(df, regime)
+
+capital, trades, signals = backtest(df)
+
+# -------------------------
+# METRICS
+# -------------------------
+win_rate = 0
+if trades:
+    wins = [t for t in trades if t > 0]
+    win_rate = len(wins) / len(trades) * 100
 
 # -------------------------
 # UI
 # -------------------------
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 
 c1.metric("Signal", signal)
 c2.metric("Regime", regime)
-c3.metric("Z-score", round(latest["z"], 2))
+c3.metric("Confidence", round(confidence, 2))
+c4.metric("Z-score", round(z, 2))
 
 st.line_chart(df["Close"])
 
-time.sleep(10)
+# Performance
+st.subheader("📊 Performance")
+
+p1, p2, p3 = st.columns(3)
+p1.metric("Final Capital", round(capital, 2))
+p2.metric("Trades", len(trades))
+p3.metric("Win Rate %", round(win_rate, 2))
+
+# Signal History
+st.subheader("📈 Signal History")
+st.write(signals[-20:])
+
+# Trades
+st.subheader("📉 Trades")
+st.write(trades[-20:])
+
+# Alert
+if signal in ["BUY", "SELL"] and confidence > 0.5:
+    st.warning("🚨 STRONG SIGNAL")
+
+# Refresh
+time.sleep(REFRESH)
 st.rerun()
