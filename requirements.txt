@@ -10,7 +10,10 @@ streamlit-autorefresh
 openai>=1.0.0
 numpy
 pandas
-scikit-learn
-hmmlearn
 yfinance
 streamlit
+numpy
+pandas
+yfinance
+streamlit
+plotly
