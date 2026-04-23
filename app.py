@@ -3,33 +3,46 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("⚡ Live Trading Signals (Gold + EURUSD)")
+st.title("⚡ Live Signals (Gold + EURUSD)")
 
-REFRESH = st.sidebar.slider("Refresh (sec)", 10, 120, 30)
-ASSET = st.sidebar.selectbox("Asset", ["GOLD", "EURUSD"])
+# 🔑 Your API Key (already added)
+API_KEY = "SWNU96LQWGRNJWGI"
+
+ASSET = st.sidebar.selectbox("Asset", ["EURUSD", "GOLD"])
+REFRESH = st.sidebar.slider("Refresh (sec)", 30, 120, 60)
 
 # -------------------------
-# LIVE DATA (YAHOO CSV)
+# DATA
 # -------------------------
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_data(asset):
     try:
-        end = int(datetime.now().timestamp())
-        start = end - 60 * 60 * 24 * 60  # last 60 days
+        if asset == "EURUSD":
+            url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol=EUR&to_symbol=USD&apikey={API_KEY}"
+            data = requests.get(url).json()
 
-        symbol = "GC=F" if asset == "GOLD" else "EURUSD=X"
+            if "Time Series FX (Daily)" not in data:
+                return None
 
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}?period1={start}&period2={end}&interval=1d&events=history"
+            df = pd.DataFrame(data["Time Series FX (Daily)"]).T
+            df = df.rename(columns={"4. close": "Close"})
 
-        df = pd.read_csv(url)
+        else:
+            # GOLD via USD proxy (Alpha Vantage doesn't directly support XAU well)
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=GLD&apikey={API_KEY}"
+            data = requests.get(url).json()
 
-        df["Date"] = pd.to_datetime(df["Date"])
-        df.set_index("Date", inplace=True)
+            if "Time Series (Daily)" not in data:
+                return None
 
-        df = df[["Close"]].dropna()
+            df = pd.DataFrame(data["Time Series (Daily)"]).T
+            df = df.rename(columns={"4. close": "Close"})
+
+        df.index = pd.to_datetime(df.index)
+        df["Close"] = df["Close"].astype(float)
+        df.sort_index(inplace=True)
 
         return df
 
@@ -56,39 +69,27 @@ def prepare(df):
     return df
 
 # -------------------------
-# REGIME
+# SIGNAL
 # -------------------------
-def get_regime(df):
+def get_signal(df):
     latest = df.iloc[-1]
 
     if latest["vol"] < latest["vol_mean"]:
-        return "MEAN REVERSION"
-    else:
-        return "TREND"
-
-# -------------------------
-# SIGNAL
-# -------------------------
-def get_signal(df, regime):
-    latest = df.iloc[-1]
-
-    z = latest["z"]
-    fast = latest["ema_fast"]
-    slow = latest["ema_slow"]
-
-    if regime == "MEAN REVERSION":
-        if z < -2:
-            return "BUY"
-        elif z > 2:
-            return "SELL"
+        regime = "MEAN REVERSION"
+        if latest["z"] < -2:
+            signal = "BUY"
+        elif latest["z"] > 2:
+            signal = "SELL"
         else:
-            return "WAIT"
-
+            signal = "WAIT"
     else:
-        if fast > slow:
-            return "BUY"
+        regime = "TREND"
+        if latest["ema_fast"] > latest["ema_slow"]:
+            signal = "BUY"
         else:
-            return "SELL"
+            signal = "SELL"
+
+    return signal, regime
 
 # -------------------------
 # MAIN
@@ -96,13 +97,13 @@ def get_signal(df, regime):
 df = get_data(ASSET)
 
 if df is None or df.empty:
-    st.error("❌ Data failed")
+    st.error("❌ Data failed (API limit or invalid key)")
     st.stop()
 
 df = prepare(df)
 
-regime = get_regime(df)
-signal = get_signal(df, regime)
+signal, regime = get_signal(df)
+
 price = df["Close"].iloc[-1]
 z = df["z"].iloc[-1]
 
@@ -116,15 +117,14 @@ c2.metric("Signal", signal)
 c3.metric("Regime", regime)
 c4.metric("Price", round(price, 2))
 
-st.subheader("Z-score")
-st.metric("Z", round(z, 2))
-
+st.metric("Z-score", round(z, 2))
 st.line_chart(df["Close"])
 
-# ALERT
 if signal in ["BUY", "SELL"]:
     st.warning("🚨 SIGNAL DETECTED")
 
-# AUTO REFRESH
+# -------------------------
+# REFRESH
+# -------------------------
 time.sleep(REFRESH)
 st.rerun()
