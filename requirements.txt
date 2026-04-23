@@ -21,3 +21,7 @@ streamlit
 yfinance
 pandas
 numpy
+streamlit==1.32.2
+yfinance==0.2.37
+pandas==1.5.3
+numpy==1.23.5
